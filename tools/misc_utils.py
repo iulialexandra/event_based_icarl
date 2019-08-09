@@ -61,7 +61,7 @@ def initialize_logger(output_dir, print_to_console):
     return logger
 
 
-def make_results_dir(save_path, inc_epocs, seed):
+def make_results_dir(save_path, inc_epocs, seed, exemplars):
     """Makes one folder for the results using the current date and time
      and initializes the logger.
     """
@@ -69,7 +69,8 @@ def make_results_dir(save_path, inc_epocs, seed):
     date = "{}_{}_{}-{}_{}_{}_{}".format(now.year, now.month, now.day, now.hour, now.minute,
                                          now.second, now.microsecond)
     results_path = os.path.join(save_path,
-                                date + "seed_{}".format(seed) + "_{}_epochs".format(inc_epocs))
+                                date + "seed_{}".format(seed) + "_{}_epochs".format(inc_epocs)
+                                + "_{}_exemplars".format(exemplars))
     if not os.path.exists(results_path):
         os.makedirs(results_path)
     # else:

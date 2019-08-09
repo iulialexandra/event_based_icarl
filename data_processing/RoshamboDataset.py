@@ -47,13 +47,17 @@ class RoshamboDataset():
         else:
             print("Invalid path to recordings")
 
-        dataset_description = open(os.path.join(self.save_path, 'dataset_description.csv'),
-                                   'w')
+        if os.path.exists(os.path.join(self.save_path, 'dataset_description.csv')):
+            write_header = False
+        else:
+            write_header = True
+
+        dataset_description = open(os.path.join(self.save_path, 'dataset_description.csv'), 'a')
         with dataset_description:
             fields = ["symbol", "train_file", "test_file", "train_num_samples", "test_num_samples"]
             csv_writer = csv.DictWriter(dataset_description, fieldnames=fields)
-            csv_writer.writeheader()
-
+            if write_header:
+                csv_writer.writeheader()
             for s, symbol in enumerate(symbols):
                 print("Loading symbol: " + symbol)
                 symbol_path = paths[s]
@@ -71,7 +75,6 @@ class RoshamboDataset():
                                                        self.resize_scale)
                         if frame_list is not None:
                             symbol_data.extend(frame_list)
-                shuffle(symbol_data)
                 split = int(0.8 * len(symbol_data))
                 train_data = symbol_data[:split]
                 test_data = symbol_data[split:]
@@ -125,9 +128,9 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_path", help="Path to recordings",
-                        default="/mnt/data/datasets/roshambo/avi_recordings/new_symbols")
+                        default="/mnt/data/datasets/roshambo/avi_recordings/demo")
     parser.add_argument("--save_path", help="Path to saved dataset",
-                        default="/mnt/data/datasets/roshambo/event_based_icarl")
+                        default="/mnt/data/datasets/icarl_cluster_code/data")
     parser.add_argument('--resize_scale', default=None)
     parser.add_argument('--max_frames_per_vid', default=-1)
     parser.add_argument('--rotation_range', default=15.)

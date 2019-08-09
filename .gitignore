@@ -2,6 +2,7 @@ results/
 old_results/
 deprecated/
 trained_base/
+exp-logs/
 *.pickle
 
 # Byte-compiled / optimized / DLL files

@@ -12,7 +12,6 @@ from scipy.spatial.distance import cdist
 
 logger = logging.getLogger("roshambo_demo")
 
-np.random.seed(1)
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 
@@ -70,7 +69,7 @@ class IncRoshambo(object):
 
         # create the input
         dataset_train = dataset_utils.dataset_tf_records(base_train_data, self.batch_size,
-                                                         self.num_batches_base, "train")
+                                                 self.num_batches_base, "train")
         iter_train, im_batch_train, lab_batch_train, lab_one_hot_train = dataset_utils.make_iterator(
             dataset_train, self.nb_classes)
         im_batch_train = tf.identity(im_batch_train, name="input")
@@ -92,9 +91,11 @@ class IncRoshambo(object):
         sess = tf.Session(config=config)
         sess.run(tf.global_variables_initializer())
 
+
         #
         # total_parameters = 0
         # for variable in tf.trainable_variables():
+        #     # shape is an array of tf.Dimension
         #     shape = variable.get_shape()
         #     print(shape)
         #     print(len(shape))
@@ -108,8 +109,6 @@ class IncRoshambo(object):
 
         lr = self.lr_old
         loss_batch = []
-        if self.base_chkpt is not None:
-            saver.restore(sess, self.base_chkpt)
 
         logger.info("********************************")
         logger.info("Base training of classes {} over {} epochs".format(base_cls_names,
@@ -132,7 +131,6 @@ class IncRoshambo(object):
                     batch += 1
                 except tf.errors.OutOfRangeError:
                     break
-
             # Print the training accuracy every epoch
             stat = []
             stat += ([ll in best for ll, best in zip(lab, np.argsort(sc, axis=1)[:, -1:])])
@@ -189,7 +187,7 @@ class IncRoshambo(object):
             os.makedirs(weights_folder)
 
         dataset_train = dataset_utils.dataset_tf_records(inc_train_data, self.batch_size,
-                                                         self.num_batches_inc, "train")
+                                                 self.num_batches_inc, "train")
 
         iter_train, im_batch_train, lab_batch_train, lab_one_hot_train = dataset_utils.make_iterator(
             dataset_train, self.nb_classes)
@@ -301,10 +299,11 @@ class IncRoshambo(object):
         self.class_names.append(inc_cls_names)
         self.nb_classes += len(inc_classes)
         self.current_save_dir = os.path.join(self.results_path,
-                                             "incremental_{}".format(len(self.all_classes) - 1))
+                                      "incremental_{}".format(len(self.all_classes) - 1))
         if not os.path.isdir(self.current_save_dir):
             os.makedirs(self.current_save_dir)
 
+        # Save model
         weights_folder = os.path.join(self.current_save_dir, "weights")
         if not os.path.exists(weights_folder):
             os.makedirs(weights_folder)
@@ -345,8 +344,8 @@ class IncRoshambo(object):
         scores = tf.concat(scores, 0)
         scores_stored = tf.concat(scores_stored, 0)
         scores = tf.identity(scores, name="output")
-        old_cl = list(chain(*self.all_classes[:-1]))
-        new_cl = self.all_classes[-1]
+        old_cl = list(chain(*self.all_classes[:-1].copy()))
+        new_cl = self.all_classes[-1].copy()
         label_old_classes = tf.sigmoid(tf.stack([scores_stored[:, i] for i in old_cl], axis=1))
         label_new_classes = tf.stack([lab_one_hot_train[:, i] for i in new_cl], axis=1)
         pred_old_classes = tf.stack([scores[:, i] for i in old_cl], axis=1)
@@ -431,8 +430,7 @@ class IncRoshambo(object):
             # reduce the learning rate
             if epoch > 0 and ((epoch + 1) % self.lr_reduce) == 0:
                 lr /= self.lr_factor
-                saver.save(sess, os.path.join(weights_folder, 'incremental_model'),
-                           global_step=epoch)
+                saver.save(sess, os.path.join(weights_folder, 'incremental_model'), global_step=epoch)
 
         # Extract weights
         self.save_weights = sess.run([variables_graph[i] for i in range(len(variables_graph))])
@@ -464,15 +462,15 @@ class IncRoshambo(object):
     def recalculate_exemplars_means(self):
         logger.info('Exemplars means recalculation starting ...')
         dataset_exemplars = dataset_utils.dataset_tf_records(self.exemplar_filenames,
-                                                             self.batch_size,
-                                                             self.exemplars_batches,
+                                                     self.batch_size,
+                                                     self.exemplars_batches,
                                                      "test")
-        classes = list(chain(*self.all_classes[:-1]))
+        classes = list(chain(*self.all_classes[:-1].copy()))
         num_classes = len(classes)
         iter, im_batch, lab_batch, lab_one_hot = dataset_utils.make_iterator(dataset_exemplars, num_classes)
         inits, _, op_feature_map = dataset_utils.prepare_network_test(self.network, im_batch,
-                                                                      self.nb_classes,
-                                                                      self.save_weights, self.res_blocks)
+                                                              self.nb_classes,
+                                                              self.save_weights, self.res_blocks)
         sess = tf.Session()
         sess.run(tf.global_variables_initializer())
         sess.run(inits)
@@ -505,106 +503,6 @@ class IncRoshambo(object):
         tf.reset_default_graph()
         self.class_exemplar_means[:num_classes] = class_means
 
-    def exemplars_in_memory(self, dataset_inc, sess):
-        """Given training images dataset, it saves a list of exemplars to be used for incremental
-        learning. iCARL-identical management method.
-
-        Args:
-            dataset_full: tensorflow dataset
-            curr_classes: indices of the classes for which the exemplars are saved
-            sess: tensorflow session
-        """
-        curr_classes = self.all_classes[-1]
-        num_inc_classes = len(curr_classes)
-
-        # calculate exemplars for new incremental classes
-        logger.info('Exemplars selection starting ...')
-        iter_inc, im_batch_inc, lab_batch_inc, lab_one_hot_inc = dataset_utils.make_iterator(
-            dataset_inc, self.nb_classes)
-
-        inits, _, op_feature_map = dataset_utils.prepare_network_test(self.network,
-                                                                      im_batch_inc,
-                                                                      self.nb_classes,
-                                                                      self.save_weights,
-                                                                      self.res_blocks)
-        sess.run(inits)
-        sess.run(iter_inc.initializer)
-
-        images = []
-        feature_maps = []
-        labels = []
-        while True:
-            try:
-                images_batch, labels_inc, _, feature_mapped_images = dataset_utils.load_in_feature_space(
-                    im_batch_inc, lab_batch_inc, lab_one_hot_inc, op_feature_map, sess)
-                feature_maps.append(feature_mapped_images.T)
-                images.append(images_batch)
-                labels.extend(labels_inc)
-            except tf.errors.OutOfRangeError:
-                break
-        images = np.concatenate(images, axis=0)
-        feature_maps = np.concatenate(feature_maps, axis=0).T
-        labels = np.asarray(labels)
-
-        # calculate how many images there are for each class
-        class_indices = []
-        for curr_cls_idx, curr_cls in enumerate(curr_classes):
-            class_indices.append(np.where(labels == curr_cls)[0])
-
-        feature_maps_size = op_feature_map.get_shape()[3].value
-        class_exemplars_list = [[] for _ in range(num_inc_classes)]
-        class_exemplars_maps_list = [[] for _ in range(num_inc_classes)]
-        class_exemplars_means_list = [[] for _ in range(num_inc_classes)]
-        feature_maps_size = op_feature_map.get_shape()[3].value
-        class_means_full_list = np.zeros((num_inc_classes, feature_maps_size))
-        nb_samples = [len(cls) for cls in class_indices]
-        self.nb_protos_per_class = min(self.nb_protos_per_class, np.amin(len(nb_samples)))
-
-        for curr_cls_idx, curr_cls in enumerate(curr_classes):
-            idx_current_class = class_indices[curr_cls_idx]
-            mask = np.ones((len(idx_current_class)))
-            curr_cls_feature_maps = feature_maps[:, idx_current_class]
-            curr_cls_images = images[idx_current_class]
-            class_mean = np.mean(curr_cls_feature_maps, axis=1)
-            class_means_full = class_mean / np.linalg.norm(class_mean)
-            class_exemplars = np.zeros((self.nb_protos_per_class,) + np.shape(curr_cls_images)[1:])
-            class_exemplars_maps = np.zeros((self.nb_protos_per_class,
-                                             np.shape(curr_cls_feature_maps)[0]))
-
-            for class_exemplars_idx in range(self.nb_protos_per_class):
-                distances = []
-                temp_feature_maps_transpose = np.transpose(curr_cls_feature_maps)
-                if class_exemplars_idx > 0:
-                    mean_features = np.transpose([np.mean(np.concatenate(
-                        [class_exemplars_maps[:class_exemplars_idx],
-                         np.expand_dims(feature_map, axis=0)]), axis=0) for feature_map in
-                        temp_feature_maps_transpose])
-                else:
-                    mean_features = curr_cls_feature_maps
-                ind_max = np.nanargmax(np.dot(class_mean, mean_features) * mask)
-                mask[ind_max] = np.NaN
-                class_exemplars[class_exemplars_idx] = curr_cls_images[ind_max]
-                class_exemplars_maps[class_exemplars_idx] = curr_cls_feature_maps[:, ind_max]
-
-            class_exemplars_list[curr_cls_idx] = [class_exemplars[i] for i in
-                                                  range(self.nb_protos_per_class)]
-            class_exemplars_maps_list[curr_cls_idx] = [class_exemplars_maps[i] for i in
-                                                       range(self.nb_protos_per_class)]
-            class_means_full_list[curr_cls_idx] = class_means_full
-            # Compute the mean of exemplar maps for each class seen so far
-            exemplar_maps_means = np.mean(class_exemplars_maps, axis=0)
-            exemplar_maps_means = (exemplar_maps_means
-                                   / np.linalg.norm(exemplar_maps_means))
-            class_exemplars_means_list[curr_cls_idx] = exemplar_maps_means
-
-        exemplars_labels_list = [[cls] * self.nb_protos_per_class for cls in curr_classes]
-        self.class_full_means.extend(class_means_full_list)
-        self.class_exemplar_means.extend(class_exemplars_means_list)
-        self.exemplar_filenames.extend(dataset_utils.exemplars_to_tfrecord(class_exemplars_list,
-                                                                           exemplars_labels_list,
-                                                                           curr_classes,
-                                                                           self.current_save_dir))
-
     def exemplars_management(self, dataset_inc, sess):
         """Given training images dataset, it saves a list of exemplars to be used for incremental
         learning. Slightly modified iCARL management method.
@@ -615,16 +513,16 @@ class IncRoshambo(object):
             sess: tensorflow session
         """
         logger.info('Exemplars selection starting ...')
-        curr_classes = self.all_classes[-1]
+        curr_classes = self.all_classes[-1].copy()
         num_inc_classes = len(curr_classes)
         iter_inc, im_batch_inc, lab_batch_inc, lab_one_hot_inc = dataset_utils.make_iterator(
             dataset_inc, self.nb_classes)
 
         inits, _, op_feature_map = dataset_utils.prepare_network_test(self.network,
-                                                                      im_batch_inc,
-                                                                      self.nb_classes,
-                                                                      self.save_weights,
-                                                                      self.res_blocks)
+                                                              im_batch_inc,
+                                                              self.nb_classes,
+                                                              self.save_weights,
+                                                              self.res_blocks)
         sess.run(inits)
         sess.run(iter_inc.initializer)
         # Means for the feature mapped images of each class (for all the training images for a
@@ -655,8 +553,7 @@ class IncRoshambo(object):
             except tf.errors.OutOfRangeError:
                 break
         for idx in range(len(curr_classes)):
-            pass
-        class_means_full[idx] /= np.linalg.norm(class_means_full[idx])
+            class_means_full[idx] /= np.linalg.norm(class_means_full[idx])
         self.nb_protos_per_class = min(self.nb_protos_per_class, np.amin(running_image_count))
         # Save only a limited number of exemplars which best approaches the class feature mapped
         # mean
@@ -689,8 +586,8 @@ class IncRoshambo(object):
 
         total = time.time() - begin
         logger.debug("It took {} sec to compute {}"
-                     " class exemplars".format(total,
-                                               len(class_exemplars[0]) * len(class_exemplars)))
+                      " class exemplars".format(total,
+                                                len(class_exemplars[0]) * len(class_exemplars)))
         exemplars_labels = [[cls] * self.nb_protos_per_class for cls in curr_classes]
         self.class_full_means.extend(class_means_full)
         exemplar_maps_means = np.mean(class_exemplars_maps, axis=1)
@@ -698,9 +595,9 @@ class IncRoshambo(object):
                                / np.linalg.norm(exemplar_maps_means, axis=1)).T
         self.class_exemplar_means.extend(exemplar_maps_means)
         self.exemplar_filenames.extend(dataset_utils.exemplars_to_tfrecord(class_exemplars,
-                                                                           exemplars_labels,
-                                                                           self.all_classes[-1],
-                                                                           self.current_save_dir))
+                                                                   exemplars_labels,
+                                                                   self.all_classes[-1].copy(),
+                                                                   self.current_save_dir))
 
     def evaluate(self, filenames_test, eval_classes, net_type):
         """Perform evaluation of the algorithm. Saves the final accuracies to file.
@@ -715,61 +612,48 @@ class IncRoshambo(object):
         if net_type == "icarl":
             exemplar_maps_means = np.asarray(self.class_exemplar_means)
         dataset_test = dataset_utils.dataset_tf_records(filenames_test, self.batch_size,
-                                                        self.num_batches_eval, "test")
+                                                self.num_batches_eval, "test")
         iter_test, im_batch_test, lab_batch_test, lab_one_hot_test = dataset_utils.make_iterator(
             dataset_test, self.nb_classes)
         inits, scores, op_feature_map = dataset_utils.prepare_network_test(self.network,
-                                                                           im_batch_test,
-                                                                           self.nb_classes,
-                                                                           self.save_weights,
-                                                                           self.res_blocks)
+                                                                   im_batch_test,
+                                                                   self.nb_classes,
+                                                                   self.save_weights,
+                                                                   self.res_blocks)
         sess = tf.Session(config=config)
         sess.run(inits)
         sess.run(iter_test.initializer)
 
-        stat_hb1 = np.zeros((len(eval_classes), 2), dtype=np.int32)
+        stat_hb1 = []
         if net_type == "icarl":
-            stat_icarl = np.zeros((len(eval_classes), 2), dtype=np.int32)
-
-        def balance_acc(stats, labels, preds):
-            present_labels = np.unique(labels)
-            for lab in present_labels:
-                location = eval_classes.index(lab)
-                present_idx = np.where(labels == lab)[0]
-                pos = np.sum(preds[present_idx] == lab)
-                neg = len(present_idx) - pos
-                stats[location][0] += pos
-                stats[location][1] += neg
+            stat_icarl = []
 
         while True:
             try:
                 sc, labels, labels_one_hot, feat_map_tmp = sess.run(
                     [scores, lab_batch_test, lab_one_hot_test, op_feature_map])
-                balance_acc(stat_hb1, labels, np.argsort(sc, axis=1)[:, -1])
-
                 if net_type == "icarl":
                     feature_maps_batch = feat_map_tmp[:, 0, 0, :]
-                    pred_inter = (feature_maps_batch.T) / np.linalg.norm(feature_maps_batch.T,
-                                                                         axis=0)
+                    pred_inter = (feature_maps_batch.T) / np.linalg.norm(feature_maps_batch.T, axis=0)
                     sqd_icarl = -cdist(exemplar_maps_means, pred_inter.T, 'sqeuclidean').T
                     icarl_labels = np.argsort(sqd_icarl, axis=1)[:, -1]
-                    balance_acc(stat_icarl, labels, icarl_labels)
+                stat_hb1 += (
+                    [ll == best for ll, best in zip(labels, np.argsort(sc, axis=1)[:, -1])])
+                if net_type == "icarl":
+                    stat_icarl += (
+                        [ll == best for ll, best in zip(labels, icarl_labels)])
             except tf.errors.OutOfRangeError:
                 break
         logger.info('Classes: {}'.format(eval_classes))
 
-        hybrid_acc = np.mean(stat_hb1[:, 0] / np.sum(stat_hb1, axis=1))
-        logger.info('Hybrid 1 accuracy: {}'.format(hybrid_acc))
-        accuracy_list.append(hybrid_acc)
-
+        logger.info('Hybrid 1' + ' accuracy: %f' % np.average(stat_hb1))
         if net_type == "icarl":
-            icarl_acc = np.mean(stat_icarl[:, 0] / np.sum(stat_icarl, axis=1))
-            logger.info('iCaRL accuracy: {}'.format(icarl_acc))
-            accuracy_list.append(icarl_acc)
-
+            logger.info('iCaRL' + ' accuracy: %f' % np.average(stat_icarl))
+        accuracy_list.append(np.average(stat_hb1))
+        if net_type == "icarl":
+            accuracy_list.append(np.average(stat_icarl))
         sess.close()
         tf.reset_default_graph()
-        with open(
-                os.path.join(self.current_save_dir, "accuracy_classes_{}.txt".format(eval_classes)),
-                "wb") as f:
+        with open(os.path.join(self.current_save_dir, "accuracy_classes_{}.txt".format(eval_classes)),
+                  "wb") as f:
             np.savetxt(f, accuracy_list)

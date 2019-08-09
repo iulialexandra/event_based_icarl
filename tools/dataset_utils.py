@@ -5,7 +5,6 @@ import logging
 import imageio
 import os
 import csv
-import lmdb
 import numpy.random as rng
 from random import shuffle
 from skimage.transform import resize
@@ -24,19 +23,6 @@ def _int64_feature(value):
 
 def _bytes_feature(value):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
-
-
-def convert_lmdb_to_tf(data_dir):
-    """Converts the original Roshambo data from LMDB to tfRecords
-    """
-    save_dir = os.path.join(data_dir, "original_tf_records")
-    train_env = lmdb.open(os.path.join(data_dir, "/lmdb_original/shuffled_train"),
-                          readonly=True)
-    test_env = lmdb.open(os.path.join(data_dir, "/lmdb_original/shuffled_test"),
-                         readonly=True)
-
-    write_lmdb_tfrecords(train_env, save_dir, 4)
-    write_lmdb_tfrecords(test_env, save_dir, 4)
 
 
 def avi_to_frame_list(avi_filename, video_limit=-1, resize_scale=None):
@@ -68,42 +54,6 @@ def avi_to_frame_list(avi_filename, video_limit=-1, resize_scale=None):
             expanded_data = [resize(im, resize_scale, preserve_range=True) for im in expanded_data]
         logging.info('Loaded frames from {}.'.format(avi_filename))
         return expanded_data
-
-
-def avi_to_tfrecord(avi_list, class_idx, dir_path):
-    """Converts avi movies to tfRecords.
-
-    Args:
-        avi_list: list of .avi file paths
-
-    Returns:
-        list of tfRecord file paths
-        list of class names
-    """
-    filenames = []
-    class_names = []
-    for i, movie_path in enumerate(avi_list):
-        movie_data = avi_to_frame_list(movie_path, video_limit=2000)
-        split_name = movie_path.split("/")
-        class_name = split_name[-2]
-        class_names.append(class_name)
-        label = class_idx[i]
-        filename = os.path.join(dir_path, "{}_test.tfrecords".format(class_name))
-        filenames.append(filename)
-        writer = tf.python_io.TFRecordWriter(filename)
-        for image in movie_data:
-            image_raw = image
-            image_raw = image_raw.astype(np.uint8)
-            image_raw = image_raw.tostring()
-            example = tf.train.Example(features=tf.train.Features(feature={
-                'height': _int64_feature(64),
-                'width': _int64_feature(64),
-                'depth': _int64_feature(1),
-                'label': _int64_feature(int(label)),
-                'image_raw': _bytes_feature(image_raw)}))
-            writer.write(example.SerializeToString())
-        writer.close()
-    return filenames, class_names
 
 
 def create_frame(y_pos, x_pos, height=240, width=304):
@@ -197,7 +147,8 @@ def bin_to_frame_list(bin_filename, resize_scale=None):
     all_images.extend(process_saccade(f3))
 
     if resize_scale is not None:
-        resized_data = [resize(im, resize_scale, preserve_range=False) for im in all_images]
+        resized_data = [resize(im, resize_scale, preserve_range=True, anti_aliasing=True)
+                        for im in all_images]
         return resized_data
     else:
         return all_images
@@ -239,7 +190,7 @@ def images_to_tfrecord(record_path, data_array, labels, class_names_dict, mode, 
             tf_writer.close()
 
 
-def save_npy_to_tfrecord(info_df, inc_idx, data_path):
+def save_npy_to_tfrecord(info_df, cls_idx, data_path, results_dir):
     def write_tfrecs_to_file(data, label, filename):
         image_dims = np.shape(data)
         tf_writer = tf.python_io.TFRecordWriter(filename)
@@ -259,17 +210,17 @@ def save_npy_to_tfrecord(info_df, inc_idx, data_path):
     class_names = []
     train_tfrecs = []
     test_tfrecs = []
-    for i, (s, symbol_info) in zip(inc_idx, info_df.iterrows()):
+    for i, (s, symbol_info) in zip(cls_idx, info_df.iterrows()):
         label = i
         print("Converting {} to tfRecord".format(symbol_info["symbol"]))
 
         train_data = np.load(os.path.join(data_path, symbol_info["train_file"]))
         test_data = np.load(os.path.join(data_path, symbol_info["test_file"]))
 
-        train_filename = os.path.join(data_path, "class_{}_{}.tfrecords".format(label, "train"))
+        train_filename = os.path.join(results_dir, "class_{}_{}.tfrecords".format(label, "train"))
         write_tfrecs_to_file(train_data, label, train_filename)
 
-        test_filename = os.path.join(data_path, "class_{}_{}.tfrecords".format(label, "test"))
+        test_filename = os.path.join(results_dir, "class_{}_{}.tfrecords".format(label, "test"))
         write_tfrecs_to_file(test_data, label, test_filename)
         class_names.append(symbol_info["symbol"])
         train_tfrecs.append(train_filename)
@@ -398,24 +349,23 @@ def parser(record):
     Args:
         record: image + label
     """
-    with tf.device('/cpu:0'):
-        features = tf.parse_single_example(record,
-                                           features={
-                                               'height': tf.FixedLenFeature([], tf.int64),
-                                               'width': tf.FixedLenFeature([], tf.int64),
-                                               'depth': tf.FixedLenFeature([], tf.int64),
-                                               'image_raw': tf.FixedLenFeature([], tf.string),
-                                               'label': tf.FixedLenFeature([], tf.int64),
-                                           })
+    features = tf.parse_single_example(record,
+                                       features={
+                                           'height': tf.FixedLenFeature([], tf.int64),
+                                           'width': tf.FixedLenFeature([], tf.int64),
+                                           'depth': tf.FixedLenFeature([], tf.int64),
+                                           'image_raw': tf.FixedLenFeature([], tf.string),
+                                           'label': tf.FixedLenFeature([], tf.int64),
+                                       })
 
-        label = tf.cast(features["label"], tf.uint8)
-        image_shape = tf.stack([64, 64, 1])
+    label = tf.cast(features["label"], tf.uint8)
+    image_shape = tf.stack([64, 64, 1])
 
-        # Perform additional preprocessing on the parsed data.
-        image = tf.decode_raw(features["image_raw"], tf.uint8)
-        image = tf.cast(image, tf.float32)
-        image = tf.scalar_mul(1 / (2 ** 8), image)
-        image = tf.reshape(image, image_shape)
+    # Perform additional preprocessing on the parsed data.
+    image = tf.decode_raw(features["image_raw"], tf.uint8)
+    image = tf.cast(image, tf.float32)
+    image = tf.scalar_mul(1 / (2 ** 8), image)
+    image = tf.reshape(image, image_shape)
     return image, label
 
 
@@ -434,65 +384,64 @@ def dataset_tf_records(filenames, batch_size, num_batches, mode):
         "train" mode: shuffled dataset
         "test" mode: unshuffled dataset
     """
-    with tf.device('/cpu:0'):
-        if mode == "inc_train":
-            # create a dataset containing only the incremental training files
-            f_inc = filenames[0]
-            dataset_inc = tf.data.Dataset.from_tensor_slices(f_inc).interleave(
-                lambda x: tf.data.TFRecordDataset(x).map(parser, num_parallel_calls=4),
-                cycle_length=len(f_inc),
-                block_length=max(1, batch_size // len(f_inc)))
-            if num_batches[0] >= 0:
-                real_dataset_size = batch_size * num_batches[0]
-                dataset_inc = dataset_inc.take(real_dataset_size)
-            dataset_inc = dataset_inc.batch(batch_size)
+    if mode == "inc_train":
+        # create a dataset containing only the incremental training files
+        f_inc = filenames[0]
+        dataset_inc = tf.data.Dataset.from_tensor_slices(f_inc).interleave(
+            lambda x: tf.data.TFRecordDataset(x).map(parser, num_parallel_calls=4),
+            cycle_length=len(f_inc),
+            block_length=max(1, batch_size // len(f_inc)))
+        if num_batches[0] >= 0:
+            real_dataset_size = batch_size * num_batches[0]
+            dataset_inc = dataset_inc.take(real_dataset_size)
+        dataset_inc = dataset_inc.batch(batch_size)
 
-            # create a dataset containing both the incremental training files and the exemplars
-            # from previous classes
-            all_filenames = list(chain(*filenames))
-            shuffle(all_filenames)
-            dataset_full = tf.data.Dataset.from_tensor_slices(all_filenames).interleave(
-                lambda x: tf.data.TFRecordDataset(x).map(parser, num_parallel_calls=4),
-                cycle_length=len(all_filenames),
-                block_length=max(1, batch_size // len(all_filenames)))
-            if num_batches[0] >= 0:
-                real_dataset_size = batch_size * num_batches[1]
-                dataset_full = dataset_full.take(real_dataset_size)
-            dataset_full = dataset_full.shuffle(batch_size * 5)
-            dataset_full = dataset_full.batch(batch_size)
-            dataset_full = dataset_full.prefetch(batch_size * 100)
-            return dataset_inc, dataset_full
+        # create a dataset containing both the incremental training files and the exemplars
+        # from previous classes
+        all_filenames = list(chain(*filenames))
+        shuffle(all_filenames)
+        dataset_full = tf.data.Dataset.from_tensor_slices(all_filenames).interleave(
+            lambda x: tf.data.TFRecordDataset(x).map(parser, num_parallel_calls=4),
+            cycle_length=len(all_filenames),
+            block_length=max(1, batch_size // len(all_filenames)))
+        if num_batches[0] >= 0:
+            real_dataset_size = batch_size * num_batches[1]
+            dataset_full = dataset_full.take(real_dataset_size)
+        dataset_full = dataset_full.shuffle(batch_size * 5)
+        dataset_full = dataset_full.batch(batch_size)
+        dataset_full = dataset_full.prefetch(batch_size * 10)
+        return dataset_inc, dataset_full
 
-        elif mode == "train":
-            shuffle(filenames)
-            dataset = tf.data.Dataset.from_tensor_slices(filenames
-                                                         ).interleave(
-                lambda x: tf.data.TFRecordDataset(x).map(parser, num_parallel_calls=4),
-                cycle_length=len(filenames),
-                block_length=max(1, batch_size // len(filenames)))
-            if num_batches >= 0:
-                real_dataset_size = batch_size * num_batches
-                dataset = dataset.take(real_dataset_size)
-            dataset = dataset.shuffle(buffer_size=batch_size * 5)
-            dataset = dataset.batch(batch_size)
-            dataset = dataset.prefetch(batch_size * 100)
-            return dataset
+    elif mode == "train":
+        shuffle(filenames)
+        dataset = tf.data.Dataset.from_tensor_slices(filenames
+                                                     ).interleave(
+            lambda x: tf.data.TFRecordDataset(x).map(parser, num_parallel_calls=4),
+            cycle_length=len(filenames),
+            block_length=max(1, batch_size // len(filenames)))
+        if num_batches >= 0:
+            real_dataset_size = batch_size * num_batches
+            dataset = dataset.take(real_dataset_size)
+        dataset = dataset.shuffle(buffer_size=batch_size * 5)
+        dataset = dataset.batch(batch_size)
+        dataset = dataset.prefetch(batch_size * 10)
+        return dataset
 
-        elif mode == "test":
-            dataset = tf.data.Dataset.from_tensor_slices(filenames
-                                                         ).interleave(
-                lambda x: tf.data.TFRecordDataset(x).map(parser, num_parallel_calls=4),
-                cycle_length=len(filenames),
-                block_length=max(1, batch_size // len(filenames)))
-            if num_batches >= 0:
-                real_dataset_size = batch_size * num_batches
-                dataset = dataset.take(real_dataset_size)
-            dataset = dataset.batch(batch_size)
-            dataset = dataset.prefetch(batch_size * 100)
-            return dataset
+    elif mode == "test":
+        dataset = tf.data.Dataset.from_tensor_slices(filenames
+                                                     ).interleave(
+            lambda x: tf.data.TFRecordDataset(x).map(parser, num_parallel_calls=4),
+            cycle_length=len(filenames),
+            block_length=max(1, batch_size // len(filenames)))
+        if num_batches >= 0:
+            real_dataset_size = batch_size * num_batches
+            dataset = dataset.take(real_dataset_size)
+        dataset = dataset.batch(batch_size)
+        dataset = dataset.prefetch(batch_size * 10)
+        return dataset
 
-        else:
-            "Please specify a different mode"
+    else:
+        "Please specify a different mode"
 
 
 def dataset_array(data_array, labels_array, batch_size, shuffle_size):
@@ -513,11 +462,10 @@ def make_iterator(dataset, num_classes):
         dataset: tensorflow dataset object
         num_classes: int; how many different classes to use for one-hot encoding of the labels
     """
-    with tf.device('/cpu:0'):
-        iterator = dataset.make_initializable_iterator()
-        image_batch, label_batch = iterator.get_next()
-        labels_one_hot = tf.one_hot(label_batch, num_classes)
-        return iterator, image_batch, label_batch, labels_one_hot
+    iterator = dataset.make_initializable_iterator()
+    image_batch, label_batch = iterator.get_next()
+    labels_one_hot = tf.one_hot(label_batch, num_classes)
+    return iterator, image_batch, label_batch, labels_one_hot
 
 
 def prepare_networks_train(model, image_batch, nb_classes, res_blocks):

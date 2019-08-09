@@ -67,8 +67,10 @@ def load_pickled_algo(args, logger):
 
     algo.exemplar_filenames = exemplars_paths
     algo.inc_epochs = args.inc_epochs
+    algo.base_epochs = args.base_epochs
     algo.num_batches_inc = args.num_batches_inc
     algo.num_batches_eval = args.num_batches_eval
+    algo.num_batches_base = args.num_batches_base
     return algo
 
 
@@ -95,84 +97,44 @@ def regular_inc_training_phase(algo, inc_train, inc_test, base_test_tfrecs, inc_
     return algo
 
 
-def big_base(args, logger):
-
-    inc_dataset = pd.read_csv(
-        os.path.join(args.data_dir, "event_based_icarl/dataset_description.csv"))
-    shuffled_classes = inc_dataset.sample(frac=1).reset_index(drop=True)
-    shuffled_classes.to_csv(os.path.join(args.results_path, "test_symbols_order.csv"), index=False)
-
-    base_test_paths = [os.path.join(args.data_dir, "avi_recordings/original/paper/2.avi"),
-                       os.path.join(args.data_dir, "avi_recordings/original/scissors/2.avi"),
-                       os.path.join(args.data_dir, "avi_recordings/original/rock/2.avi"),
-                       os.path.join(args.data_dir, "avi_recordings/original/background/2.avi")]
-    base_class_idx = [0, 1, 2, 3]
-    base_offset = 4
-    base_test_tfrecs, base_class_names = dataset_utils.avi_to_tfrecord(base_test_paths,
-                                                                       base_class_idx,
-                                                                       os.path.join(args.data_dir,
-                                                                            "event_based_icarl"))
-
-    inc_iters = range(0, len(shuffled_classes)-1, 2)
-
-    algo = load_pickled_algo(args, logger)
-    algo.evaluate(base_test_tfrecs, base_class_idx, "regular")
-
-    icarl_algo = copy.deepcopy(algo)
-
-    for iter in inc_iters:
-        logger.info("Incremental learning iteration {}".format(iter))
-        symbol_idx = np.array(range(iter, iter + 2))
-        inc_info = shuffled_classes.iloc[symbol_idx]
-        inc_class_idx = list(symbol_idx + base_offset)
-        inc_train_tfrecs, inc_test_tfrecs, inc_class_names = dataset_utils.save_npy_to_tfrecord(
-            inc_info,
-            inc_class_idx,
-            os.path.join(args.data_dir, "event_based_icarl"))
-
-        # icarl training and testing
-        logger.info("Training with distillation and nearest-mean on {} after having"
-                    " trained on the base classes.".format(inc_class_names))
-        beginning = time.time()
-        icarl_algo = icarl_inc_training_phase(icarl_algo, inc_train_tfrecs, inc_test_tfrecs,
-                                              base_test_tfrecs,
-                                              inc_class_idx, base_class_idx, inc_class_names)
-        ending = time.time()
-        elapsed = ending - beginning
-        np.save(os.path.join(args.results_path, "incremental_learning_duration.txt"),
-                np.asarray(elapsed))
-
-        base_test_tfrecs.extend(inc_test_tfrecs)
-        base_class_idx.extend(inc_class_idx)
-
-
-def small_base(args, logger):
-
+def offline_pipeline(args, logger):
     dataset = pd.read_csv(
-        os.path.join(args.data_dir, "event_based_icarl/dataset_description.csv"))
-    shuffled_classes = dataset.sample(frac=1).reset_index(drop=True)
-    base_class_idx = list(range(4))
-    base_info = shuffled_classes.iloc[base_class_idx]
+        os.path.join(args.data_dir, "dataset_description.csv"))
+    base_class_idx = list(range(args.base_classes))
+    classes = dataset.iloc[:-1]
+    base_info = dataset.iloc[base_class_idx]
+
+    inc_indices = np.arange(args.base_classes, len(classes))
+    inc_iters = np.arange(0, len(classes) - args.base_classes, 2)
+    np.random.shuffle(inc_indices)
+
     base_train_tfrecs, base_test_tfrecs, base_class_names = dataset_utils.save_npy_to_tfrecord(
         base_info,
-        args.data_dir)
+        base_class_idx,
+        args.data_dir,
+        args.results_path)
 
-    algo = base_training_phase(args, base_train_tfrecs, base_test_tfrecs, base_class_idx,
-                                base_class_names)
+    if args.base_knowledge == "big":
+        algo = load_pickled_algo(args, logger)
+        icarl_algo = copy.deepcopy(algo)
+        icarl_algo.evaluate(base_test_tfrecs, base_class_idx, "regular")
+    else:
+        icarl_algo = base_training_phase(args, base_train_tfrecs, base_test_tfrecs,
+                                         base_class_idx.copy(),
+                                         base_class_names)
 
-    algo.evaluate(base_test_tfrecs, base_class_idx, "regular")
-    base_offset = 4
-    inc_iters = range(4, len(shuffled_classes)-1, 2)
+    base_offset = args.base_classes
 
     for iter in inc_iters:
-        logger.info("Incremental learning iteration {}".format(iter))
-        symbol_idx = np.array(range(iter, iter + 2))
-        inc_info = shuffled_classes.iloc[symbol_idx]
-        inc_class_idx = list(symbol_idx + base_offset)
+        idx_slice = np.array([iter, iter + 1])
+        symbol_idx = [inc_indices[iter], inc_indices[iter + 1]]
+        inc_class_idx = list(idx_slice + base_offset)
+        inc_info = classes.iloc[symbol_idx]
         inc_train_tfrecs, inc_test_tfrecs, inc_class_names = dataset_utils.save_npy_to_tfrecord(
             inc_info,
-            inc_class_idx,
-            os.path.join(args.data_dir, "event_based_icarl"))
+            inc_class_idx.copy(),
+            args.data_dir,
+            args.results_path)
 
         # icarl training and testing
         logger.info("Training with distillation and nearest-mean on {} after having"
@@ -180,7 +142,9 @@ def small_base(args, logger):
         beginning = time.time()
         icarl_algo = icarl_inc_training_phase(icarl_algo, inc_train_tfrecs, inc_test_tfrecs,
                                               base_test_tfrecs,
-                                              inc_class_idx, base_class_idx, inc_class_names)
+                                              inc_class_idx.copy(),
+                                              base_class_idx.copy(),
+                                              inc_class_names)
         ending = time.time()
         elapsed = ending - beginning
         np.save(os.path.join(args.results_path, "incremental_learning_duration.txt"),
@@ -202,7 +166,7 @@ def parse_args():
                            type=bool, default=False)
     argparser.add_argument('--batch_size', type=int,
                            help="The number of images to process at the same time",
-                           default=64)
+                           default=512)
     argparser.add_argument('--num_batches_base', type=int,
                            help="Over how many batches to train. Set to -1 for all available data.",
                            default=-1)
@@ -231,10 +195,10 @@ def parse_args():
                            default=0.01)
     argparser.add_argument('--lr_factor', type=float,
                            help="By how much the learning rate decreases over epochs",
-                           default=0.9)
+                           default=1.0)
     argparser.add_argument('--weight_decay', type=float,
                            help="By how much the weights decay",
-                           default=0.01)
+                           default=1e-5)
     argparser.add_argument('--seed', help="Random seed to make experiments reproducible",
                            type=int, default=1)
     argparser.add_argument('--lr_reduce', type=int,
@@ -250,7 +214,7 @@ def parse_args():
                            default="./results")
     argparser.add_argument('--data_dir',
                            help="Path where data is stored",
-                           default="/mnt/data/datasets/roshambo/")
+                           default="/mnt/data/datasets/roshambo/event_based_icarl")
     argparser.add_argument('--base_chkpt',
                            help="Path where the saved weights for the base net are",
                            default=None)
@@ -265,31 +229,30 @@ def parse_args():
                            help="whether you want to load the base network or an already"
                                 "incrementally trained network",
                            default="base")
+    argparser.add_argument('--base_knowledge',
+                           help="if you want to start from a pretrained network with vast "
+                                "base knowledge, type big. otherwise type small",
+                           default="big")
+    argparser.add_argument('--base_classes', type=int,
+                           help="how many classes to use as base knowledge",
+                           default=4)
     return argparser.parse_args()
 
 
 def main():
     args = parse_args()
 
-    args.base_epochs = 0
-    args.inc_epochs = 1
-    args.num_batches_base = -1
-    args.num_batches_inc = -1
-    args.num_batches_eval = -1
-    args.console_print = False
-
-    # args.base_chkpt = "/mnt/Storage/code/incremental/roshambo-incremental-demo/results/" \
-    #                   "trained_base/base/weights/base_model-49"
     # make the experiment deterministic
     np.random.seed(args.seed)
     rn.seed(args.seed)
     tf.set_random_seed(args.seed)
     os.environ["PYTHONSEED"] = str(args.seed)
 
-    args.results_path = make_results_dir(args.save_path, args.inc_epochs, args.seed)
+    args.results_path = make_results_dir(args.save_path, args.inc_epochs, args.seed,
+                                         args.exemplars_memory)
     logger = initialize_logger(args.results_path, args.console_print)
     experiment_details(args)
-    big_base(args, logger)
+    offline_pipeline(args, logger)
 
 
 if __name__ == '__main__':

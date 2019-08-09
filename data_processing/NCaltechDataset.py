@@ -47,7 +47,7 @@ class NCaltechDataset():
                 for recording in symbol_recs:
                     rec_path = os.path.join(symbol_path, recording)
                     frame_list = bin_to_frame_list(rec_path,
-                                                   self.resize_scale)
+                                                   (64, 64))
                     if frame_list is not None:
                         symbol_data.extend(frame_list)
 
@@ -56,31 +56,31 @@ class NCaltechDataset():
                 train_data = symbol_data[:split]
                 test_data = symbol_data[split:]
 
-                # train_data = augment_dataset(train_data, self.train_augment,
-                #                              rotation_range=self.rotation_range,
-                #                              width_shift_range=self.width_shift_range,
-                #                              height_shift_range=self.height_shift_range,
-                #                              brightness_range=self.brightness_range,
-                #                              shear_range=self.shear_range,
-                #                              zoom_range=self.zoom_range,
-                #                              channel_shift_range=self.channel_shift_range,
-                #                              fill_mode=self.fill_mode,
-                #                              cval=self.cval,
-                #                              horizontal_flip=self.horizontal_flip,
-                #                              vertical_flip=self.vertical_flip)
-                # if self.test_augment > 0:
-                #     test_data = augment_dataset(test_data, self.test_augment,
-                #                                 rotation_range=self.rotation_range,
-                #                                 width_shift_range=self.width_shift_range,
-                #                                 height_shift_range=self.height_shift_range,
-                #                                 brightness_range=self.brightness_range,
-                #                                 shear_range=self.shear_range,
-                #                                 zoom_range=self.zoom_range,
-                #                                 channel_shift_range=self.channel_shift_range,
-                #                                 fill_mode=self.fill_mode,
-                #                                 cval=self.cval,
-                #                                 horizontal_flip=self.horizontal_flip,
-                #                                 vertical_flip=self.vertical_flip)
+                train_data = augment_dataset(train_data, self.train_augment,
+                                             rotation_range=self.rotation_range,
+                                             width_shift_range=self.width_shift_range,
+                                             height_shift_range=self.height_shift_range,
+                                             brightness_range=self.brightness_range,
+                                             shear_range=self.shear_range,
+                                             zoom_range=self.zoom_range,
+                                             channel_shift_range=self.channel_shift_range,
+                                             fill_mode=self.fill_mode,
+                                             cval=self.cval,
+                                             horizontal_flip=self.horizontal_flip,
+                                             vertical_flip=self.vertical_flip)
+                if self.test_augment > 0:
+                    test_data = augment_dataset(test_data, self.test_augment,
+                                                rotation_range=self.rotation_range,
+                                                width_shift_range=self.width_shift_range,
+                                                height_shift_range=self.height_shift_range,
+                                                brightness_range=self.brightness_range,
+                                                shear_range=self.shear_range,
+                                                zoom_range=self.zoom_range,
+                                                channel_shift_range=self.channel_shift_range,
+                                                fill_mode=self.fill_mode,
+                                                cval=self.cval,
+                                                horizontal_flip=self.horizontal_flip,
+                                                vertical_flip=self.vertical_flip)
 
                 train_data = np.asarray(train_data, dtype=np.uint8)
                 test_data = np.asarray(test_data, dtype=np.uint8)
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     parser.add_argument('--horizontal_flip', default=True)
     parser.add_argument('--vertical_flip', default=False)
     parser.add_argument('--data_format', default=None)
-    parser.add_argument('--train_augment', default=0)
-    parser.add_argument('--test_augment', default=0)
+    parser.add_argument('--train_augment', default=5000)
+    parser.add_argument('--test_augment', default=1000)
     args = parser.parse_args()
     main(args)
