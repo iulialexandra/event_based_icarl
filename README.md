@@ -1,1 +1,1 @@
-# event_based_icarl
+I. A. Lungu, S. -C. Liu and T. Delbruck, "Fast event-driven incremental learning of hand symbols," 2019 IEEE International Conference on Artificial Intelligence Circuits and Systems (AICAS), Hsinchu, Taiwan, 2019, pp. 25-28, doi: 10.1109/AICAS.2019.8771472.
